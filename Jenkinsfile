@@ -1,152 +1,151 @@
 pipeline {
     agent any
     
-    tools {
-        nodejs 'nodejs-24'
+    environment {
+        DOCKER_IMAGE_NAME = 'vite-react-app'
+        DOCKER_IMAGE_TAG = "${env.BUILD_NUMBER}"
+        DOCKER_REGISTRY = 'index.docker.io' // Add your Docker registry URL if needed (e.g., 'docker.io/username')
+        EMAIL_RECIPIENTS = 'rhannif100@gmail.com' // Update with actual email
     }
     
-    environment {
-        DOCKER_IMAGE_NAME = 'nodejs-react-app-demo'
-        DOCKER_IMAGE_TAG = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
-        DOCKER_REGISTRY = 'index.docker.io'
-        EMAIL_RECIPIENTS = 'rhannif100@gmail.com'
+    tools {
+        nodejs "nodejs-24"
     }
-
+    
     stages {
-
         stage('Checkout') {
-            when { branch 'testing' }
             steps {
-                echo "Checking out branch: ${env.BRANCH_NAME}"
+                script {
+                    // Only build from testing branch
+                    if (env.BRANCH_NAME != 'testing') {
+                        error("Pipeline only runs on 'testing' branch. Current branch: ${env.BRANCH_NAME}")
+                    }
+                }
                 checkout scm
+                echo "Checked out branch: ${env.BRANCH_NAME}"
             }
         }
-
+        
         stage('Install Dependencies') {
-            when { branch 'testing' }
             steps {
                 echo 'Installing npm dependencies...'
-                sh 'node --version'
-                sh 'npm --version'
                 sh 'npm ci'
             }
         }
-
-        stage('Lint') {
-            when { branch 'testing' }
+        
+        stage('Run Linting Tests') {
             steps {
-                echo 'Running ESLint...'
+                echo 'Running ESLint tests...'
                 sh 'npm run lint'
             }
         }
-
-        stage('Build') {
-            when { branch 'testing' }
+        
+        stage('Build Application') {
             steps {
-                echo 'Building the application...'
+                echo 'Building application in development mode...'
                 sh 'npm run build:dev'
             }
         }
-
+        
         stage('Build Docker Image') {
-            when { branch 'testing' }
             steps {
-                echo "Building Docker image..."
                 script {
-                    docker.build("${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}")
-                    docker.build("${DOCKER_IMAGE_NAME}-latest")
+                    echo "Building Docker image: ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
+                    
+                    // Build Docker image
+                    if (env.DOCKER_REGISTRY) {
+                        docker.build("${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}")
+                        docker.build("${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:latest")
+                    } else {
+                        docker.build("${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}")
+                        docker.build("${DOCKER_IMAGE_NAME}:latest")
+                    }
                 }
             }
         }
-
+        
         stage('Push Docker Image') {
-            when { branch 'testing' }
             steps {
-                echo "Pushing Docker image to registry..."
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-credentials-id') {
-                        docker.image("${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}").push()
-                        docker.image("${DOCKER_IMAGE_NAME}-latest").push()
+                    echo 'Pushing Docker image to registry...'
+                    
+                    if (env.DOCKER_REGISTRY) {
+                        docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-credentials-id') {
+                            def image = docker.image("${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}")
+                            image.push()
+                            image.push('latest')
+                        }
+                    } else {
+                        echo 'No registry configured. Image built locally.'
                     }
                 }
             }
         }
-
-        stage('Deploy') {
-            when { branch 'testing' }
+        
+        stage('Deploy Container') {
             steps {
-                echo "Deploying application..."
                 script {
+                    echo 'Deploying Docker container...'
+                    
+                    // Stop and remove existing container if running
+                    sh '''
+                        docker stop ${DOCKER_IMAGE_NAME} || true
+                        docker rm ${DOCKER_IMAGE_NAME} || true
+                    '''
+                    
+                    // Run new container
+                    def imageName = env.DOCKER_REGISTRY ? "${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}" : "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
                     sh """
-                        docker stop ${DOCKER_IMAGE_NAME}-testing || true
-                        docker rm ${DOCKER_IMAGE_NAME}-testing || true
                         docker run -d \
-                            --name ${DOCKER_IMAGE_NAME}-testing \
-                            -p 8081:80 \
-                            ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
+                            --name ${DOCKER_IMAGE_NAME} \
+                            -p 3000:80 \
+                            --restart unless-stopped \
+                            ${imageName}
                     """
-                }
-            }
-        }
-
-        stage('Health Check') {
-            when { branch 'testing' }
-            steps {
-                echo 'Performing health check...'
-                script {
-                    retry(3) {
-                        sleep 5
-                        sh "docker ps | grep ${DOCKER_IMAGE_NAME}-testing"
-                    }
+                    
+                    echo 'Container deployed successfully on port 3000'
                 }
             }
         }
     }
-
+    
     post {
         success {
-            echo 'Pipeline completed successfully!'
-            script {
-                if (env.BRANCH_NAME == "testing") {
-                    emailext(
-                        subject: "SUCCESS: Jenkins Build ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        body: """
-                            <h2>Build Successful (testing)</h2>
-                            <p><strong>Job:</strong> ${env.JOB_NAME}</p>
-                            <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
-                            <p><strong>Branch:</strong> ${env.BRANCH_NAME}</p>
-                            <p><strong>Docker Image:</strong> ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}</p>
-                            <p><strong>Build URL:</strong> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
-                        """,
-                        to: "${EMAIL_RECIPIENTS}",
-                        mimeType: 'text/html'
-                    )
-                }
-            }
+            emailext (
+                subject: "✅ Jenkins Build SUCCESS: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                body: """
+                    <h2>Build Successful!</h2>
+                    <p><strong>Job:</strong> ${env.JOB_NAME}</p>
+                    <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
+                    <p><strong>Branch:</strong> ${env.BRANCH_NAME}</p>
+                    <p><strong>Docker Image:</strong> ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}</p>
+                    <p><strong>Duration:</strong> ${currentBuild.durationString}</p>
+                    <p><a href="${env.BUILD_URL}">View Build Details</a></p>
+                """,
+                to: "${EMAIL_RECIPIENTS}",
+                mimeType: 'text/html'
+            )
         }
-
+        
         failure {
-            echo 'Pipeline failed!'
-            script {
-                if (env.BRANCH_NAME == "testing") {
-                    emailext(
-                        subject: "FAILURE: Jenkins Build ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        body: """
-                            <h2>Build Failed (testing)</h2>
-                            <p><strong>Job:</strong> ${env.JOB_NAME}</p>
-                            <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
-                            <p><strong>Branch:</strong> ${env.BRANCH_NAME}</p>
-                            <p>Please check console output for details.</p>
-                        """,
-                        to: "${EMAIL_RECIPIENTS}",
-                        mimeType: 'text/html'
-                    )
-                }
-            }
+            emailext (
+                subject: "❌ Jenkins Build FAILED: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                body: """
+                    <h2>Build Failed!</h2>
+                    <p><strong>Job:</strong> ${env.JOB_NAME}</p>
+                    <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
+                    <p><strong>Branch:</strong> ${env.BRANCH_NAME}</p>
+                    <p><strong>Duration:</strong> ${currentBuild.durationString}</p>
+                    <p><strong>Error:</strong> Check the console output for details.</p>
+                    <p><a href="${env.BUILD_URL}console">View Console Output</a></p>
+                """,
+                to: "${EMAIL_RECIPIENTS}",
+                mimeType: 'text/html'
+            )
         }
-
+        
         always {
-            echo 'Cleaning workspace...'
+            echo 'Cleaning up workspace...'
             cleanWs()
         }
     }

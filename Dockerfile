@@ -3,27 +3,24 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install bun
-RUN npm install -g bun
-
 # Copy package files
-COPY package.json bun.lockb ./
+COPY package.json package-lock.json* ./
 
 # Install dependencies
-RUN bun install --frozen-lockfile
+RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN bun run build
+# Build the application in development mode
+RUN npm run build:dev
 
 # Production stage
 FROM node:22-alpine
 
 WORKDIR /app
 
-# Install a simple HTTP server to serve static files
+# Install serve to host static files
 RUN npm install -g serve
 
 # Copy built app from builder stage
