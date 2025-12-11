@@ -15,12 +15,6 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                script {
-                    // Only build from testing branch
-                    if (env.BRANCH_NAME != 'testing') {
-                        error("Pipeline only runs on 'testing' branch. Current branch: ${env.BRANCH_NAME}")
-                    }
-                }
                 checkout scm
                 echo "Checked out branch: ${env.BRANCH_NAME}"
             }
